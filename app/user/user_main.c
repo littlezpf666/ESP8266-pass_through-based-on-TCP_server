@@ -22,13 +22,11 @@
  *
  */
 
+#include "ets_sys.h"
+#include "osapi.h"
 
-#include "includes.h"
+#include "user_interface.h"
 #include "driver/uart.h"
-#include "spi_flash.h"
-#include "server.h"
-
-#define Project "transparent transmission"
 
 
 #if ((SPI_FLASH_SIZE_MAP == 0) || (SPI_FLASH_SIZE_MAP == 1))
@@ -93,56 +91,7 @@ void ICACHE_FLASH_ATTR user_pre_init(void)
 		while(1);
 	}
 }
-ETSTimer station_check;
-/***************************接收到station的连接每2s进入一次**********************************/
-void ICACHE_FLASH_ATTR check_station(void *arg){
-	struct	ip_info	ap_ip;
-	struct station_info*st_info;
-	os_timer_disarm(&station_check);
-	//获取ESP8266连接的station的IP
-	st_info=wifi_softap_get_station_info();
-	if(st_info){
-		/*
-		//获取ESP8266本机IP
-		wifi_get_ip_info(STATION_IF,&ap_ip);
-				os_printf("IP:"IPSTR"\n\r",IP2STR(&ap_ip.ip));
-		//my_station_init(&(st_info->ip),&ap_ip.ip,8888);//注意第一个参数的赋值
-		os_printf("IP:"IPSTR"",IP2STR(&ap_ip.ip));*/
-		server_init(TCP_PORT);
-		os_printf("TCP initialization success\n\r");
-		os_free(st_info);
-	}
-	else{
-		os_timer_arm(&station_check,2000,NULL);
-	}
 
-}
-/*************************WiFi连接事件回调函数***********************************/
-void ICACHE_FLASH_ATTR AP_be_connected_cb(System_Event_t *evt){
-
-	switch(evt->event){
-	case EVENT_SOFTAPMODE_STACONNECTED:
-		os_timer_disarm(&station_check);
-		/*对于同一个 timer，os_timer_arm 或 os_timer_arm_us 不能重复调用，必须先 os_timer_disarm。
-		 *os_timer_setfn 必须在 timer 未使能的情况下调用，在 os_timer_arm 或 os_timer_arm_us之前或者 os_timer_disarm之后。*/
-		os_timer_setfn(&station_check,check_station,NULL);
-		os_timer_arm(&station_check,2000,NULL);
-		break;
-	default:
-		break;
-	}
-}
-void to_scan(void) {
-	struct	ip_info	info;
-	server_init(TCP_PORT);
-	os_printf("First TCP initialization success\n\r");
-
-	wifi_set_event_handler_cb(AP_be_connected_cb);
-}
-u16 N_Data_FLASH_SEC=0x77;
-/*字符串必须存在以char生成的数组*/
-u8 A_W_Data[16]="0123456789";
-u32 A_R_Data[16]={0};//缓存读取Flash的数据
 /******************************************************************************
  * FunctionName : user_init
  * Description  : entry of user application, init user function here
@@ -152,33 +101,10 @@ u32 A_R_Data[16]={0};//缓存读取Flash的数据
 void ICACHE_FLASH_ATTR
 user_init(void)
 {
-	struct softap_config apConfig;
-
 	uart_init(115200,115200);
 	os_printf("\r\n--------------------------------\r\n");
-	os_printf("SDK version:%s", system_get_sdk_version());//串口打印
+	os_printf("SDK version:%s\n", system_get_sdk_version());//���ڴ�ӡ
+	uart0_sendStr("First step\n");
 	os_printf("\r\n--------------------------------\r\n");
-
-	spi_flash_erase_sector(0x77);//写入前要对相应扇区进行擦除
-	spi_flash_write(0x77*4096,(uint32*)A_W_Data,sizeof(A_W_Data));
-	os_printf("\r\n----------Write Flash Data OVER-----------\r\n");
-
-	spi_flash_read(0x77*4096,(uint32*)A_R_Data,sizeof(A_R_Data));
-	os_printf("Read Data=%s",A_R_Data);
-	os_printf("\r\n-------------Read Flash OVER--------------\r\n");
-
-	wifi_set_opmode_current(STATIONAP_MODE);
-	os_strcpy(apConfig.ssid, "PVDF_AP");
-	apConfig.ssid_len = strlen("PVDF_AP");
-	os_strcpy(apConfig.password,"12345678");
-	apConfig.authmode = AUTH_WPA_WPA2_PSK;
-	apConfig.max_connection =4;//最大连接数量，最大支持四个，默认四个
-	apConfig.beacon_interval = 100;//信标间隔，默认为100
-	apConfig.channel = 1;//信道，共支持1~13个信道
-	apConfig.ssid_hidden = 0;//隐藏SSID，0：不隐藏  1：隐藏
-	wifi_softap_set_config(&apConfig);
-
-
-	system_init_done_cb(to_scan);
 }
 

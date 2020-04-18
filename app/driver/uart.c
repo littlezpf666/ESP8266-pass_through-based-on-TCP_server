@@ -24,13 +24,13 @@
 
 #include "ets_sys.h"
 #include "osapi.h"
-
+#include "osapi.h"
 #include "mem.h"
 #include "os_type.h"
 #include "user_interface.h"
 #include "driver/uart.h"
 #include "driver/uart_register.h"
-#include "espconn.h"
+
 // UartDev is defined and initialized in rom code.
 extern UartDevice    UartDev;
 
@@ -225,49 +225,55 @@ void at_port_print(const char *str) __attribute__((alias("uart0_sendStr")));
  * Parameters   : void *para - point to ETS_UART_INTR_ATTACH's arg
  * Returns      : NONE
 *******************************************************************************/
-char *buffer=NULL;//串口接收后暂存的缓存数组指针
-extern struct espconn user_tcp_conn;
 LOCAL void
 uart0_rx_intr_handler(void *para)
 {
     /* uart0 and uart1 intr combine togther, when interrupt occur, see reg 0x3ff20020, bit2, bit0 represents
     * uart1 and uart0 respectively
     */
-	    uint8 fifo_len = 0;
-		uint8 d_tmp = 0;
-		uint8 idx=0;
-		remot_info *premot;
-		uart_rx_intr_disable(UART0);
-		WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_FULL_INT_CLR);
-		CLEAR_PERI_REG_MASK(UART_INT_ENA(UART0),UART_TXFIFO_EMPTY_INT_ENA);
-		fifo_len = (READ_PERI_REG(UART_STATUS(UART0))>>UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT;//得到缓存区的长度
+    uint8_t RcvChar;
+    uint8_t uart_no = UART0;//UartDev.buff_uart_no;
+    uint8_t fifo_len = 0;
+    uint8_t buf_idx = 0;
+    uint8_t temp, cnt;
+    //RcvMsgBuff *pRxBuff = (RcvMsgBuff *)para;
 
-	    buffer=(char*)os_zalloc(fifo_len+1);
-		for(idx=0;idx<fifo_len;idx++) {
-			 d_tmp = READ_PERI_REG(UART_FIFO(UART0)) & 0xFF;
-			 buffer[idx]=d_tmp;
-			 //uart_tx_one_char(UART0, d_tmp);
-		 }
-		if(fifo_len<100)
-					{
-						if (espconn_get_connection_info(&user_tcp_conn,&premot,0)==ESPCONN_OK){
-							os_printf("remote_port:%d,remote_IP:"IPSTR"\r\n", user_tcp_conn.proto.tcp->remote_port
-															 ,IP2STR(user_tcp_conn.proto.tcp->remote_ip));
-							user_tcp_conn.proto.tcp->remote_port  = premot->remote_port;
-							user_tcp_conn.proto.tcp->remote_ip[0] = premot->remote_ip[0];
-							user_tcp_conn.proto.tcp->remote_ip[1] = premot->remote_ip[1];
-							user_tcp_conn.proto.tcp->remote_ip[2] = premot->remote_ip[2];
-							user_tcp_conn.proto.tcp->remote_ip[3] = premot->remote_ip[3];
-							os_printf("remote_port:%d,remote_IP:"IPSTR"\r\n", user_tcp_conn.proto.tcp->remote_port
-											 ,IP2STR(user_tcp_conn.proto.tcp->remote_ip));
-							espconn_send(&user_tcp_conn,buffer,strlen(buffer));
-						}
+    /*ATTENTION:*/
+    /*IN NON-OS VERSION SDK, DO NOT USE "ICACHE_FLASH_ATTR" FUNCTIONS IN THE WHOLE HANDLER PROCESS*/
+    /*ALL THE FUNCTIONS CALLED IN INTERRUPT HANDLER MUST BE DECLARED IN RAM */
+    /*IF NOT , POST AN EVENT AND PROCESS IN SYSTEM TASK */
+    if (UART_FRM_ERR_INT_ST == (READ_PERI_REG(UART_INT_ST(uart_no)) & UART_FRM_ERR_INT_ST)) {
+        DBG1("FRM_ERR\r\n");
+        WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_FRM_ERR_INT_CLR);
+    } else if (UART_RXFIFO_FULL_INT_ST == (READ_PERI_REG(UART_INT_ST(uart_no)) & UART_RXFIFO_FULL_INT_ST)) {
+        DBG("f");
+        uart_rx_intr_disable(UART0);
+        WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_FULL_INT_CLR);
+        system_os_post(uart_recvTaskPrio, 0, 0);
+    } else if (UART_RXFIFO_TOUT_INT_ST == (READ_PERI_REG(UART_INT_ST(uart_no)) & UART_RXFIFO_TOUT_INT_ST)) {
+        DBG("t");
+        uart_rx_intr_disable(UART0);
+        WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_TOUT_INT_CLR);
+        system_os_post(uart_recvTaskPrio, 0, 0);
+    } else if (UART_TXFIFO_EMPTY_INT_ST == (READ_PERI_REG(UART_INT_ST(uart_no)) & UART_TXFIFO_EMPTY_INT_ST)) {
+        DBG("e");
+        /* to output uart data from uart buffer directly in empty interrupt handler*/
+        /*instead of processing in system event, in order not to wait for current task/function to quit */
+        /*ATTENTION:*/
+        /*IN NON-OS VERSION SDK, DO NOT USE "ICACHE_FLASH_ATTR" FUNCTIONS IN THE WHOLE HANDLER PROCESS*/
+        /*ALL THE FUNCTIONS CALLED IN INTERRUPT HANDLER MUST BE DECLARED IN RAM */
+        CLEAR_PERI_REG_MASK(UART_INT_ENA(UART0), UART_TXFIFO_EMPTY_INT_ENA);
+#if UART_BUFF_EN
+        tx_start_uart_buffer(UART0);
+#endif
+        //system_os_post(uart_recvTaskPrio, 1, 0);
+        WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_TXFIFO_EMPTY_INT_CLR);
 
-					}
+    } else if (UART_RXFIFO_OVF_INT_ST  == (READ_PERI_REG(UART_INT_ST(uart_no)) & UART_RXFIFO_OVF_INT_ST)) {
+        WRITE_PERI_REG(UART_INT_CLR(uart_no), UART_RXFIFO_OVF_INT_CLR);
+        DBG1("RX OVF!!\r\n");
+    }
 
-			os_free(buffer);
-			WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_FULL_INT_CLR|UART_RXFIFO_TOUT_INT_CLR);
-			uart_rx_intr_enable(UART0);//重新使能串口
 }
 
 /******************************************************************************
